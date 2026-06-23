@@ -1,25 +1,27 @@
 // services/email.service.js
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
+const dns = require('dns');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SPACESHIP_SMTP_HOST,
-  port: process.env.SPACESHIP_SMTP_PORT,
-  auth: {
-    user: process.env.SPACESHIP_SMTP_USER,
-    pass: process.env.SPACESHIP_SMTP_PASS,
-  },
-});
+// Force Node.js DNS lookups to prioritize IPv4 addresses over IPv6 globally
+dns.setDefaultResultOrder('ipv4first');
+
+
+const resend = new Resend(process.env.RESEND_API_KEY || 're_your_api_key');
 
 async function sendEmail({ to, subject, html, text }) {
-  const mailOptions = {
-    from: process.env.SPACESHIP_FROM_EMAIL,
-    to,
-    subject,
-    html,
-    text,
-  };
-  const info = await transporter.sendMail(mailOptions);
-  return info;
+  try {
+    const data = await resend.emails.send({
+      from: process.env.SPACESHIP_FROM_EMAIL,
+      to: [to],
+      subject: subject,
+      html: html,
+      text: text,
+    });
+    
+    return data;
+  } catch (error) {
+    throw new Error(`API Email delivery failed: ${error.message}`);
+  }
 }
 
 module.exports = { sendEmail };
