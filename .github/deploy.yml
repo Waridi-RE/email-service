@@ -1,0 +1,57 @@
+# .github/workflows/deploy.yml
+name: Email Service CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  continuous-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-with: '24'
+        cache: 'npm'
+
+    - name: Install Dependencies
+      run: npm ci
+
+    - name: Run Linters & Tests
+      run: |
+        npm run lint --if-present
+        npm test --if-present
+
+  continuous-deployment:
+    needs: continuous-integration
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Deploy to Server via SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: 22
+        script: |
+
+          cd /root/emailservice
+          
+          # Initialize git if it's the first deployment, otherwise pull changes
+          if [ ! -d ".git" ]; then
+            git clone git@github.com:${{ github.repository }}.git .
+          else
+            git pull origin main
+          fi
+          
+          # Install production-only dependencies
+          npm install --production
+          
+          # Reload the application gracefully using PM2 (zero-downtime)
+          pm2 reload ecosystem.config.js --env production || pm2 start index.js --name "node-backend"
