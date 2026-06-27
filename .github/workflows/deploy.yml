@@ -40,18 +40,20 @@ jobs:
         password: ${{ secrets.SERVER_PASSWORD }}
         port: 22
         script: |
+          export PATH=$PATH:/usr/bin:/usr/local/bin:/root/.nvm/versions/node/$(node -v)/bin
 
           cd /root/emailservice
           
-          # Initialize git if it's the first deployment, otherwise pull changes
+          # 2. Use GitHub's internal auth token to pull from your PRIVATE repository securely
           if [ ! -d ".git" ]; then
-            git clone https://github.com/${{ github.repository }}.git .
+            git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git .
           else
-            git remote set-url origin https://github.com/${{ github.repository }}.git
+            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+            git pull origin main
           fi
           
-          # Install production-only dependencies
+          # 3. Use standard paths or fallback aliases to install and run
           npm install --production
           
-          # Reload the application gracefully using PM2 (zero-downtime)
-          pm2 reload ecosystem.config.js --env production || pm2 start index.js --name "node-backend"
+          # Try running pm2 via absolute npx fallback if global paths are misconfigured
+          pm2 reload ecosystem.config.js --env production || npx pm2 reload ecosystem.config.js --env production || pm2 start index.js --name "node-backend"
