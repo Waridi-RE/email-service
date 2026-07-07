@@ -1,3 +1,4 @@
+// rabbitmq/connection.js
 const amqp = require('amqplib');
 
 let connection = null;
@@ -6,14 +7,13 @@ const RETRY_INTERVAL = 5000;
 
 async function connectRabbitMQ(retries = 5) {
   try {
-    connection = await amqp.connect(process.env.RABBITMQ_URL || 'amqp://localhost');
+    const url = process.env.RABBITMQ_URL || 'amqp://localhost';
+    connection = await amqp.connect(url);
     channel = await connection.createChannel();
 
-    // ✅ Declare exchanges first
+    // Declare exchanges and queues (as before)
     await channel.assertExchange('email-exchange', 'direct', { durable: true });
-    await channel.assertExchange('email-dlx', 'direct', { durable: true }); 
-
-    // Main queue with dead-letter config
+    await channel.assertExchange('email-dlx', 'direct', { durable: true });
     await channel.assertQueue(process.env.EMAIL_QUEUE, {
       durable: true,
       arguments: {
@@ -23,10 +23,18 @@ async function connectRabbitMQ(retries = 5) {
       },
     });
     await channel.bindQueue(process.env.EMAIL_QUEUE, 'email-exchange', '');
-
-    // Dead-letter queue
     await channel.assertQueue(process.env.DEAD_LETTER_QUEUE, { durable: true });
     await channel.bindQueue(process.env.DEAD_LETTER_QUEUE, 'email-dlx', process.env.DEAD_LETTER_QUEUE);
+
+    // Handle connection close
+    connection.on('close', () => {
+      console.warn('⚠️ RabbitMQ connection closed. Reconnecting...');
+      setTimeout(() => {
+        connectRabbitMQ().then(() => {
+          // Optionally restart consumer if needed
+        });
+      }, RETRY_INTERVAL);
+    });
 
     console.log('✅ RabbitMQ connected and queues ready.');
     return { connection, channel };

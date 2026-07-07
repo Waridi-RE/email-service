@@ -1,44 +1,59 @@
 // rabbitmq/consumer.js
-const { getChannel } = require('./connection');
+const { getChannel, connectRabbitMQ } = require('./connection');
 const { sendEmail } = require('../services/email.service');
-const { EMAIL_QUEUE, DEAD_LETTER_QUEUE } = process.env;
+const { EMAIL_QUEUE } = process.env;
+
+let isConsuming = false;
 
 async function startEmailConsumer() {
-  const channel = getChannel();
+  try {
+    const channel = getChannel();
+    channel.prefetch(1);
 
-  // Prefetch 1 job at a time to avoid overloading
-  channel.prefetch(1);
+    // Handle channel errors
+    channel.on('error', (err) => {
+      console.error('Channel error:', err);
+      // Attempt to reconnect after a delay
+      setTimeout(() => {
+        console.log('🔄 Attempting to restart consumer...');
+        startEmailConsumer();
+      }, 5000);
+    });
 
-  channel.consume(EMAIL_QUEUE, async (msg) => {
-    if (!msg) return;
+    channel.consume(EMAIL_QUEUE, async (msg) => {
+      if (!msg) return;
 
-    const emailData = JSON.parse(msg.content.toString());
-    console.log(`📬 Processing email for ${emailData.to}`);
+      const emailData = JSON.parse(msg.content.toString());
+      console.log(`📬 Processing email for ${emailData.to}`);
 
-    try {
-      await sendEmail(emailData);
-      console.log(`✅ Email sent to ${emailData.to}`);
-      channel.ack(msg);
-    } catch (err) {
-      console.error(`❌ Failed to send email to ${emailData.to}:`, err.message);
+      try {
+        await sendEmail(emailData);
+        console.log(`✅ Email sent to ${emailData.to}`);
+        channel.ack(msg);
+      } catch (err) {
+        console.error(`❌ Failed to send email to ${emailData.to}:`, err.message);
 
-      // Retry logic: if retry count < 3, requeue; else dead-letter
-      const retryCount = (msg.properties.headers?.retryCount || 0) + 1;
-      if (retryCount < 3) {
-        // Reject and requeue with incremented retry count
-        channel.nack(msg, false, true); // requeue
-        console.log(`🔄 Retry ${retryCount} for ${emailData.to}`);
-      } else {
-        // Move to dead-letter queue
-        channel.nack(msg, false, false);
-        console.log(`💀 Email sent to dead-letter for ${emailData.to}`);
-        // Optionally, you could also publish to a separate DLX exchange
-        // but we already set it up via queue args.
+        const retryCount = (msg.properties.headers?.retryCount || 0) + 1;
+        if (retryCount < 3) {
+          channel.nack(msg, false, true);
+          console.log(`🔄 Retry ${retryCount} for ${emailData.to}`);
+        } else {
+          channel.nack(msg, false, false);
+          console.log(`💀 Email moved to dead-letter for ${emailData.to}`);
+        }
       }
-    }
-  }, { noAck: false });
+    }, { noAck: false });
 
-  console.log('👂 Waiting for email jobs...');
+    isConsuming = true;
+    console.log('👂 Waiting for email jobs...');
+  } catch (err) {
+    console.error('❌ Failed to start consumer:', err);
+    // Retry after 5 seconds
+    setTimeout(() => {
+      console.log('🔄 Retrying consumer start...');
+      startEmailConsumer();
+    }, 5000);
+  }
 }
 
 module.exports = { startEmailConsumer };
